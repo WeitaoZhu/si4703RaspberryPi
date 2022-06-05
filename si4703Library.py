@@ -10,11 +10,13 @@
 # To-do:
 # Implement the remaining RDS data groups
 # Add more try/execpt handling to catch errors
-# 
+#
 
-import smbus
+from pyb import Pin
+from machine import SoftI2C,Pin
+import machine
 import time
-import RPi.GPIO as GPIO
+
 
 class si4703Radio():
 
@@ -95,22 +97,14 @@ class si4703Radio():
     SI4703_SEEK_UP =        1
     
     
-    def __init__(self, i2cAddr, resetPin, irqPIN = -1):        
+    def __init__(self, i2cAddr, resetPin, sclkPin, sdioPin, irqPIN = -1):        
         
-        GPIO.setwarnings(False)
-        self.GPIO = GPIO
-        
-        self.i2CAddr = i2cAddr
+        self.i2CAddr  = i2cAddr
         self.resetPin = resetPin
+        self.sdioPin  = sdioPin
+        self.sclkPin  = sclkPin
+
         self.irqPIN = irqPIN
-        
-        #setup the GPIO variables
-        self.i2c = smbus.SMBus(1)
-        self.GPIO.setmode(GPIO.BCM)
-        self.GPIO.setup(self.resetPin, GPIO.OUT)
-        self.GPIO.setup(0, GPIO.OUT)
-        self.GPIO.setwarnings(False)
-        
         # Global shadow copy of the si4703 registers
         self.si4703_registers = [0] * 16
         self.si4703_rds_ps = [0] * 8
@@ -148,10 +142,10 @@ class si4703Radio():
             self.si4703WriteRegisters()
 
     def si4703SetChannel(self,channel):
-        newChannel = channel * 10 # e.g. 973 * 10 = 9730
-        newChannel -= 8750 # e.g. 9730 - 8750 = 980
-        newChannel /= 10; # e.g. 980 / 10 = 98
-
+        #newChannel = channel * 10 # e.g. 973 * 10 = 9730
+        #newChannel -= 8750 # e.g. 9730 - 8750 = 980
+        #newChannel /= 10; # e.g. 980 / 10 = 98
+        newChannel = channel
         # These steps come from AN230 page 20 rev 0.9
         self.si4703ReadRegisters()
         self.si4703_registers[self.SI4703_CHANNEL] &= 0xFE00 # Clear out the channel bits
@@ -226,14 +220,16 @@ class si4703Radio():
         # The Si4703 will be in an unknown state. RST must be controlled
 
         # Configure I2C and GPIO
-        
-        self.GPIO.output(0,GPIO.LOW)
-        time.sleep(0.1)
-        self.GPIO.output(self.resetPin, GPIO.LOW)
-        time.sleep(0.1)
-        self.GPIO.output(self.resetPin, GPIO.HIGH)
-        time.sleep(0.1)
-        
+        Si4703_resetPin=Pin(self.resetPin,Pin.OUT_PP)
+        Si4703_sdioPin=Pin(self.sdioPin,Pin.OUT_PP)
+
+        Si4703_sdioPin.low()
+        time.sleep_ms(100)
+        Si4703_resetPin.low()
+        time.sleep_ms(100)
+        Si4703_resetPin.high()
+
+        self.i2c = SoftI2C(sda=Pin(self.sdioPin), scl=Pin(self.sclkPin),freq = 10000)
         self.si4703ReadRegisters()
         self.si4703_registers[self.SI4703_TEST1] = 0x8100 #Enable the oscillator, from AN230 page 12, rev 0.9
         
@@ -279,12 +275,26 @@ class si4703Radio():
         
         # only need a list that holds 0x02 - 0x07: 6 words or 12 bytes
         i2cWriteBytes = [0] * 12
+        WriteBuffer = bytearray(12)
         #move the shadow copy into the write buffer
         for i in range(0,6):
             i2cWriteBytes[i*2], i2cWriteBytes[(i*2)+1] = divmod(self.si4703_registers[i+2], 0x100)
 
         # the "address" of the SMBUS write command is not used on the si4703 - need to use the first byte
-        self.i2c.write_i2c_block_data(self.i2CAddr, i2cWriteBytes[0], i2cWriteBytes[1:11])
+        WriteBuffer[0] = i2cWriteBytes[0]
+        WriteBuffer[1] = i2cWriteBytes[1]
+        WriteBuffer[2] = i2cWriteBytes[2]
+        WriteBuffer[3] = i2cWriteBytes[3]
+        WriteBuffer[4] = i2cWriteBytes[4]
+        WriteBuffer[5] = i2cWriteBytes[5]
+        WriteBuffer[6] = i2cWriteBytes[6]
+        WriteBuffer[7] = i2cWriteBytes[7]
+        WriteBuffer[8] = i2cWriteBytes[8]
+        WriteBuffer[9] = i2cWriteBytes[9]
+        WriteBuffer[10] = i2cWriteBytes[10]
+        WriteBuffer[11] = i2cWriteBytes[11]
+        
+        self.i2c.writeto(self.i2CAddr, WriteBuffer)
 
     def si4703ReadRegisters(self):
         #Read the entire register control set from 0x00 to 0x0F
@@ -292,11 +302,8 @@ class si4703Radio():
         i2cReadBytes = [0] * 32
         
         #Si4703 begins reading from register upper register of 0x0A and reads to 0x0F, then loops to 0x00.
-        # SMBus requires an "address" parameter even though the 4703 doesn't need one
-        # Need to send the current value of the upper byte of register 0x02 as command byte
-        cmdByte = self.si4703_registers[0x02] >> 8
 
-        i2cReadBytes = self.i2c.read_i2c_block_data(self.i2CAddr, cmdByte, 32)
+        i2cReadBytes = self.i2c.readfrom(self.i2CAddr, 32)
         regIndex = 0x0A
         
         #Remember, register 0x0A comes in first so we have to shuffle the array around a bit

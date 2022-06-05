@@ -5,7 +5,7 @@ from si4703Library import si4703Radio
 
 def main():
     # device ID is typically 0x10 - confirm with "sudo i2cdetect 1"
-    radio = si4703Radio(0x10, 5, 19)
+    radio = si4703Radio(0x10, 'B13', "G12", "G13")
     radio.si4703Init()
     radio.si4703SetChannel(987)
     radio.si4703SetVolume(5)
